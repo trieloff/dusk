@@ -1,0 +1,44 @@
+name: Dusk
+options:
+  bundleIdPrefix: com.trieloff
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+packages:
+  DuskCore:
+    path: ..
+targets:
+  Dusk:
+    type: application
+    platform: macOS
+    sources: [Sources]
+    dependencies:
+      - package: DuskCore
+        product: DuskCore
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: Dusk
+        CFBundleShortVersionString: "0.2.0"
+        CFBundleVersion: "1"
+        LSUIElement: true
+        LSApplicationCategoryType: public.app-category.utilities
+        NSCameraUsageDescription: >-
+          Dusk takes a photo of the room each time you switch between light and dark
+          mode by hand, so it can learn what "dark enough" looks like to you.
+        NSHumanReadableCopyright: Lars Trieloff
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.trieloff.dusk
+        PRODUCT_NAME: Dusk
+        MARKETING_VERSION: "0.2.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "6.0"
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: Apple Development
+        DEVELOPMENT_TEAM: S8LB56P782
+        # DisplayServices and SkyLight are loaded with dlopen, which the
+        # sandbox and library validation would refuse.
+        ENABLE_HARDENED_RUNTIME: NO
+        ENABLE_APP_SANDBOX: NO
+        COMBINE_HIDPI_IMAGES: YES

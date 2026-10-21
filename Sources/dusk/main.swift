@@ -38,49 +38,81 @@ func time(_ d: Date) -> String {
 
 // MARK: commands
 
-func status() {
+@MainActor func status() async {
     let config = loadConfig()
-    let c = Controller(config: config)
-    let s = c.snapshot()
+    let e = Engine(config: config, log: { _ in })
+    let s = await e.sample()
     print("dusk \(version)   config: \(Config.defaultURL.path)\(FileManager.default.fileExists(atPath: Config.defaultURL.path) ? "" : " (defaults)")")
     print("")
     print("ambient light")
-    if s.readings.isEmpty { print("  no sensor found") }
-    for r in s.readings {
-        print("  \(r.product) @ \(String(format: "0x%08x", r.locationID)): \(lux(r.lux))"
-              + (r.kelvin.map { String(format: ", %.0f K", $0) } ?? ""))
+    if s.sensors.isEmpty { print("  no sensor found") }
+    for r in s.sensors {
+        print("  sensor \(r.key): \(lux(r.lux))" + (r.kelvin.map { String(format: ", %.0f K", $0) } ?? ""))
     }
-    if s.readings.count > 1 { print("  median: \(lux(s.lux))") }
+    if s.sensors.count > 1 { print("  median: \(lux(s.medianLux))") }
     print("")
-    print("sun")
-    if let sun = c.sun, let el = s.sunElevation {
+    print("sun and sky")
+    if let sun = e.sun, let el = s.sunElevation {
+        let up = sun.isUp(at: Date(), morning: config.sunThreshold(rising: true), evening: config.sunThreshold(rising: false))
         let rise = sun.crossings(on: Date(), threshold: config.sunThreshold(rising: true))?.rise
         let set = sun.crossings(on: Date(), threshold: config.sunThreshold(rising: false))?.set
-        print(String(format: "  elevation %.1f°, %@, %@", el, sun.isRising(at: Date()) ? "rising" : "setting",
-                     s.sunUp == true ? "counts as day" : "counts as night")
+        print(String(format: "  sun %.1f°, %@, %@", el, s.sunRising == true ? "rising" : "setting",
+                     up ? "counts as day" : "counts as night")
               + "; day today \(rise.map(time) ?? "–")–\(set.map(time) ?? "–")")
     } else {
         print("  no location configured (set latitude/longitude)")
     }
+    if let w = s.weather {
+        print(String(format: "  outdoors %.0f W/m²", w.shortwave) + (w.cloudCover.map { String(format: ", %.0f%% cloud", $0) } ?? ""))
+    } else if e.weather != nil {
+        print("  outdoors: no weather data (\(await e.weather?.lastError ?? "offline?"))")
+    }
     print("")
-    let v = verdict(source: config.source, lux: s.lux, sunUp: s.sunUp,
-                    darkBelow: config.darkBelowLux, lightAbove: config.lightAboveLux)
-    print("appearance: \(s.appearance)   verdict (\(config.source)): \(v.map { "\($0)" } ?? "keep (within \(fmtBand(config)))")")
+    print("appearance: \(s.appearance)")
+    if let m = e.model {
+        let p = m.probabilityDark(s.features)
+        print("  model: \(m.summary)")
+        print(String(format: "    p(dark) now %@, from %d correction(s), cross-validated %.0f%% right",
+                     p.map { String(format: "%.2f", $0) } ?? "– (missing input)", m.corrections, m.correctionAccuracy * 100))
+    } else {
+        let v = verdict(source: config.source, lux: s.medianLux, sunUp: s.sunElevation.map { _ in
+            e.sun!.isUp(at: Date(), morning: config.sunThreshold(rising: true), evening: config.sunThreshold(rising: false)) },
+            darkBelow: config.darkBelowLux, lightAbove: config.lightAboveLux)
+        print("  rules (\(config.source)) say: \(v.map { "\($0)" } ?? "keep (within \(fmtBand(config)))"); no model yet")
+    }
     if SystemAppearance.switchesAutomatically {
         print("  warning: System Settings' appearance is set to Auto, which will fight dusk")
     }
     print("")
     print("displays (brightness mode: \(config.brightness.mode))")
-    for d in c.displays.displays() {
-        let auto = c.displays.autoBrightness(of: d.id).map { $0 ? "auto-brightness on" : "auto-brightness off" } ?? "no auto-brightness"
-        print("  \(d.name)\(d.isMain ? " (main)" : ""): \(pct(c.displays.brightness(of: d.id))), \(auto)")
+    for d in e.displays.displays() {
+        let auto = e.displays.autoBrightness(of: d.id).map { $0 ? "auto-brightness on" : "auto-brightness off" } ?? "no auto-brightness"
+        print("  \(d.name)\(d.isMain ? " (main)" : ""): \(pct(e.displays.brightness(of: d.id))), \(auto)")
     }
-    if config.brightness.mode == .curve, let l = s.lux {
+    if config.brightness.mode == .curve, let l = s.medianLux {
         print("  curve target at \(lux(l)) in \(s.appearance) mode: \(pct(config.brightness.curve(for: s.appearance).brightness(forLux: l)))")
     }
     print("")
-    let loaded = launchctl(["print", "gui/\(getuid())/\(label)"], quiet: true) == 0
-    print("agent: \(loaded ? "running (\(plistURL.path))" : "not installed")")
+    let agent = launchctl(["print", "gui/\(getuid())/\(label)"], quiet: true) == 0
+    let app = !NSRunningApplicationList.dusk.isEmpty
+    print("running: \(app ? "Dusk.app" : agent ? "launch agent \(label)" : "nothing")")
+    if let store = e.store {
+        print("history: \(store.count("samples")) samples, \(e.confirmedCorrections) confirmed correction(s) in \(store.directory.path)")
+    }
+}
+
+enum NSRunningApplicationList {
+    static var dusk: [String] {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        p.arguments = ["-x", "Dusk"]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        try? p.run()
+        p.waitUntilExit()
+        return String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .split(separator: "\n").map(String.init)
+    }
 }
 
 func fmtBand(_ c: Config) -> String { "\(lux(c.darkBelowLux))…\(lux(c.lightAboveLux))" }
@@ -96,33 +128,26 @@ func sense(_ args: [String]) {
     } while every > 0
 }
 
-func runOnce() {
-    let c = Controller(config: loadConfig(), log: say)
-    c.takeOverBrightness()
-    c.tick(immediate: true)
+@MainActor func runOnce() async {
+    let e = Engine(config: loadConfig(), log: say)
+    e.takeOverBrightness()
+    await e.tick()
 }
 
-func watch() {
+@MainActor func watch() {
     let config = loadConfig()
-    let c = Controller(config: config, log: say)
-    say("dusk \(version) watching every \(Int(config.intervalSeconds))s (source \(config.source), brightness \(config.brightness.mode))")
-    if c.sensors.read().isEmpty && config.source != .sun {
-        say(c.sun == nil ? "no ambient light sensor and no location: only manual commands will work"
+    let e = Engine(config: config, log: say)
+    say("dusk \(version) watching every \(Int(config.intervalSeconds))s (source \(config.source), brightness \(config.brightness.mode))"
+        + (e.model.map { "; model: \($0.summary)" } ?? ""))
+    if e.sensors.read().isEmpty && config.source != .sun {
+        say(e.sun == nil ? "no ambient light sensor and no location: only manual commands will work"
                          : "no ambient light sensor: falling back to the sun")
     }
-    c.takeOverBrightness()
-    c.tick()
-    let timer = DispatchSource.makeTimerSource(queue: .main)
-    timer.schedule(deadline: .now() + config.intervalSeconds,
-                   repeating: config.intervalSeconds, leeway: .seconds(2))
-    timer.setEventHandler { c.tick() }
-    timer.resume()
+    e.start()
     for sig in [SIGTERM, SIGINT, SIGHUP] {
         signal(sig, SIG_IGN)
         let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
-        // Auto-brightness stays off across restarts (launchd restarts the agent
-        // on every `kickstart -k`, and handing it back for a second makes the
-        // displays visibly dip); `dusk uninstall` is what restores it.
+        // Auto-brightness stays off across restarts; `dusk uninstall` restores it.
         src.setEventHandler {
             say("stopping (signal \(sig))")
             exit(0)
@@ -130,13 +155,51 @@ func watch() {
         src.resume()
         signalSources.append(src)
     }
+    engineRef = e
     dispatchMain()
 }
+nonisolated(unsafe) var engineRef: AnyObject?
 nonisolated(unsafe) var signalSources: [DispatchSourceSignal] = []
 
-func setAppearance(_ args: [String]) {
-    guard let a = args.first.flatMap(Appearance.init(rawValue:)) else { die("usage: dusk appearance light|dark", code: 64) }
-    do { try SystemAppearance.set(a) } catch { die("\(error)") }
+@MainActor func setAppearance(_ args: [String]) async {
+    guard let a = args.first.flatMap(Appearance.init(rawValue:)) else {
+        die("usage: dusk appearance light|dark [--learn]", code: 64)
+    }
+    if args.contains("--learn") {
+        // A correction needs five minutes to stand; the running app or agent
+        // settles it, so this only records it as pending.
+        let e = Engine(config: loadConfig(), log: say)
+        await e.set(a, source: "cli")
+    } else {
+        do { try SystemAppearance.set(a) } catch { die("\(error)") }
+    }
+}
+
+@MainActor func modelCommand(_ args: [String]) async {
+    let e = Engine(config: loadConfig(), log: { print($0) })
+    if args.first == "retrain" { await e.retrain() }
+    guard let m = e.model else {
+        print("no model yet: \(e.confirmedCorrections) confirmed correction(s)"); return
+    }
+    print("\(m.summary)")
+    print("  features: \(m.features.joined(separator: ", "))")
+    print(String(format: "  %d correction(s), %d example(s), cross-validated %.0f%% right on corrections, loss %.3f",
+                 m.corrections, m.examples, m.correctionAccuracy * 100, m.loss))
+    print("  trained \(m.trainedAt)")
+}
+
+func correctionsCommand() {
+    guard let store = try? Store() else { die("cannot open the history") }
+    let f = DateFormatter()
+    f.dateFormat = "yyyy-MM-dd HH:mm"
+    for state in [Store.CorrectionState.confirmed, .pending, .reverted] {
+        for c in store.corrections(state) {
+            print("\(f.string(from: c.time))  \(state.rawValue.padding(toLength: 9, withPad: " ", startingAt: 0)) → \(c.to.rawValue.padding(toLength: 5, withPad: " ", startingAt: 0))  \(c.source.padding(toLength: 9, withPad: " ", startingAt: 0))  \(lux(c.sample.medianLux))"
+                  + (c.sample.sunElevation.map { String(format: ", sun %.1f°", $0) } ?? "")
+                  + (c.sample.weather.map { String(format: ", %.0f W/m²", $0.shortwave) } ?? "")
+                  + (c.sample.cameras.isEmpty ? "" : ", \(c.sample.cameras.count) photo(s)"))
+        }
+    }
 }
 
 func setBrightness(_ args: [String]) {
@@ -209,10 +272,10 @@ func install() {
     print("installed \(plistURL.path)\nlog: \(logURL.path)")
 }
 
-func uninstall() {
+@MainActor func uninstall() {
     launchctl(["bootout", "gui/\(getuid())/\(label)"], quiet: true)
     try? FileManager.default.removeItem(at: plistURL)
-    Controller(config: loadConfig(), log: { print($0) }).restoreBrightness()
+    Engine(config: loadConfig(), log: { print($0) }).restoreBrightness()
     print("removed \(plistURL.path)")
 }
 
@@ -225,7 +288,9 @@ func help() {
       dusk run                     decide once and apply, without the hold time
       dusk watch                   keep deciding (what the launch agent runs)
       dusk install | uninstall     manage the launch agent (\(label))
-      dusk appearance light|dark   set the appearance by hand
+      dusk appearance light|dark [--learn]   set the appearance (and teach dusk)
+      dusk model [retrain]         the learned predictor
+      dusk corrections             every manual switch and what became of it
       dusk brightness 0.8 | 80%    set every display's brightness by hand
       dusk config [init --lat N --lon N]   show, or write, \(Config.defaultURL.path)
     """)
@@ -235,13 +300,15 @@ func help() {
 
 let args = Array(CommandLine.arguments.dropFirst())
 switch args.first ?? "status" {
-case "status": status()
+case "status": await status()
 case "sense": sense(Array(args.dropFirst()))
-case "run": runOnce()
+case "run": await runOnce()
 case "watch": watch()
 case "install": install()
 case "uninstall": uninstall()
-case "appearance": setAppearance(Array(args.dropFirst()))
+case "appearance": await setAppearance(Array(args.dropFirst()))
+case "model": await modelCommand(Array(args.dropFirst()))
+case "corrections": correctionsCommand()
 case "brightness": setBrightness(Array(args.dropFirst()))
 case "config": configCommand(Array(args.dropFirst()))
 case "version", "--version": print("dusk \(version)")

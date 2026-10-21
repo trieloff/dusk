@@ -1,3 +1,5 @@
 .build/
 .swiftpm/
 *.xcodeproj/
+App/build/
+App/Info.plist

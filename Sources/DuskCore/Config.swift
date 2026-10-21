@@ -85,6 +85,20 @@ public struct Config: Codable, Sendable, Equatable {
     public var intervalSeconds: Double = 15
     /// Weight of each new reading in the moving average (0…1).
     public var smoothing: Double = 0.3
+    /// How often a sample is stored for learning.
+    public var sampleSeconds: Double = 60
+    /// Decide by the learned model once there is one (otherwise by the rules above).
+    public var useModel: Bool = true
+    /// The model's verdict needs this much confidence; in between, nothing changes.
+    public var modelDarkAbove: Double = 0.6
+    public var modelLightBelow: Double = 0.4
+    /// Cameras to photograph (substring of the name; empty for all).
+    public var cameraFilter: String = "Studio Display Camera"
+    /// Photograph the room with every manual correction.
+    public var cameraOnCorrection: Bool = true
+    /// Also photograph on a schedule (minutes; 0 = never), so the camera can
+    /// become a predictor. Each capture lights the camera indicator.
+    public var cameraEveryMinutes: Double = 0
 
     public init() {}
 
@@ -104,6 +118,13 @@ public struct Config: Codable, Sendable, Equatable {
         brightness = try c.decodeIfPresent(BrightnessConfig.self, forKey: .brightness) ?? d.brightness
         intervalSeconds = try c.decodeIfPresent(Double.self, forKey: .intervalSeconds) ?? d.intervalSeconds
         smoothing = try c.decodeIfPresent(Double.self, forKey: .smoothing) ?? d.smoothing
+        sampleSeconds = try c.decodeIfPresent(Double.self, forKey: .sampleSeconds) ?? d.sampleSeconds
+        useModel = try c.decodeIfPresent(Bool.self, forKey: .useModel) ?? d.useModel
+        modelDarkAbove = try c.decodeIfPresent(Double.self, forKey: .modelDarkAbove) ?? d.modelDarkAbove
+        modelLightBelow = try c.decodeIfPresent(Double.self, forKey: .modelLightBelow) ?? d.modelLightBelow
+        cameraFilter = try c.decodeIfPresent(String.self, forKey: .cameraFilter) ?? d.cameraFilter
+        cameraOnCorrection = try c.decodeIfPresent(Bool.self, forKey: .cameraOnCorrection) ?? d.cameraOnCorrection
+        cameraEveryMinutes = try c.decodeIfPresent(Double.self, forKey: .cameraEveryMinutes) ?? d.cameraEveryMinutes
     }
 
     /// The "sun is down" threshold that applies while the sun is rising or setting.
@@ -155,5 +176,7 @@ public struct Config: Codable, Sendable, Equatable {
         if b.minLux <= 0 || b.minLux >= b.maxLux { try fail("brightness needs 0 < minLux < maxLux") }
         if intervalSeconds < 1 { try fail("intervalSeconds must be at least 1") }
         if !(0...1).contains(smoothing) || smoothing == 0 { try fail("smoothing must be within (0, 1]") }
+        if !(modelLightBelow < modelDarkAbove) { try fail("modelLightBelow must be below modelDarkAbove") }
+        if sampleSeconds < 5 { try fail("sampleSeconds must be at least 5") }
     }
 }

@@ -6,6 +6,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .executable(name: "dusk", targets: ["dusk"]),
+        .library(name: "DuskCore", targets: ["DuskCore"]),
     ],
     targets: [
         .target(

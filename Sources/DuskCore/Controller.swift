@@ -61,9 +61,12 @@ public final class Controller {
     public func snapshot(now: Date = Date()) -> Snapshot {
         let readings = sensors.read()
         let elevation = sun?.elevation(at: now)
+        let up = sun.map {
+            $0.isUp(at: now, morning: config.sunThreshold(rising: true),
+                    evening: config.sunThreshold(rising: false))
+        }
         return Snapshot(readings: readings, lux: median(readings.map(\.lux)),
-                        sunElevation: elevation,
-                        sunUp: elevation.map { $0 > config.sunElevation },
+                        sunElevation: elevation, sunUp: up,
                         appearance: SystemAppearance.current)
     }
 
@@ -100,7 +103,7 @@ public final class Controller {
         switch config.brightness.mode {
         case .system: target = nil
         case .fixed: target = appearance == .dark ? config.brightness.dark : config.brightness.light
-        case .curve: target = lux.map { config.brightness.curve.brightness(forLux: $0) }
+        case .curve: target = lux.map { config.brightness.curve(for: appearance).brightness(forLux: $0) }
         }
         if let target { applyBrightness(target, now: now) }
     }

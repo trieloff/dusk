@@ -29,6 +29,8 @@ public struct BrightnessConfig: Codable, Sendable, Equatable {
     public var maxLux: Double = 20
     public var minimum: Double = 0.4
     public var maximum: Double = 1.0
+    /// In dark mode the curve tops out here instead of at `maximum`; nil keeps `maximum`.
+    public var darkMaximum: Double?
     /// `fixed` mode levels.
     public var light: Double = 1.0
     public var dark: Double = 0.5
@@ -45,13 +47,17 @@ public struct BrightnessConfig: Codable, Sendable, Equatable {
         maxLux = try c.decodeIfPresent(Double.self, forKey: .maxLux) ?? d.maxLux
         minimum = try c.decodeIfPresent(Double.self, forKey: .minimum) ?? d.minimum
         maximum = try c.decodeIfPresent(Double.self, forKey: .maximum) ?? d.maximum
+        darkMaximum = try c.decodeIfPresent(Double.self, forKey: .darkMaximum)
         light = try c.decodeIfPresent(Double.self, forKey: .light) ?? d.light
         dark = try c.decodeIfPresent(Double.self, forKey: .dark) ?? d.dark
         deadband = try c.decodeIfPresent(Double.self, forKey: .deadband) ?? d.deadband
     }
 
-    public var curve: BrightnessCurve {
-        BrightnessCurve(minLux: minLux, maxLux: maxLux, minimum: minimum, maximum: maximum)
+    public var curve: BrightnessCurve { curve(for: .light) }
+
+    public func curve(for appearance: Appearance) -> BrightnessCurve {
+        let top = appearance == .dark ? max(minimum, darkMaximum ?? maximum) : maximum
+        return BrightnessCurve(minLux: minLux, maxLux: maxLux, minimum: minimum, maximum: top)
     }
 }
 
@@ -69,6 +75,10 @@ public struct Config: Codable, Sendable, Equatable {
     public var longitude: Double?
     /// Solar elevation that counts as "down": -0.833° is sunset proper, -6° civil dusk.
     public var sunElevation: Double = -0.833
+    /// Separate thresholds for the setting and the rising sun, when the evening
+    /// should start earlier than the morning ends. Each defaults to `sunElevation`.
+    public var eveningSunElevation: Double?
+    public var morningSunElevation: Double?
     public var manageAppearance: Bool = true
     public var brightness = BrightnessConfig()
     /// Sensor poll interval for `dusk watch`.
@@ -88,10 +98,17 @@ public struct Config: Codable, Sendable, Equatable {
         latitude = try c.decodeIfPresent(Double.self, forKey: .latitude)
         longitude = try c.decodeIfPresent(Double.self, forKey: .longitude)
         sunElevation = try c.decodeIfPresent(Double.self, forKey: .sunElevation) ?? d.sunElevation
+        eveningSunElevation = try c.decodeIfPresent(Double.self, forKey: .eveningSunElevation)
+        morningSunElevation = try c.decodeIfPresent(Double.self, forKey: .morningSunElevation)
         manageAppearance = try c.decodeIfPresent(Bool.self, forKey: .manageAppearance) ?? d.manageAppearance
         brightness = try c.decodeIfPresent(BrightnessConfig.self, forKey: .brightness) ?? d.brightness
         intervalSeconds = try c.decodeIfPresent(Double.self, forKey: .intervalSeconds) ?? d.intervalSeconds
         smoothing = try c.decodeIfPresent(Double.self, forKey: .smoothing) ?? d.smoothing
+    }
+
+    /// The "sun is down" threshold that applies while the sun is rising or setting.
+    public func sunThreshold(rising: Bool) -> Double {
+        (rising ? morningSunElevation : eveningSunElevation) ?? sunElevation
     }
 
     public static var defaultURL: URL {
@@ -134,6 +151,7 @@ public struct Config: Codable, Sendable, Equatable {
             try fail("brightness.\(name) must be within 0…1")
         }
         if b.minimum > b.maximum { try fail("brightness.minimum must not exceed brightness.maximum") }
+        if let dm = b.darkMaximum, !(0...1).contains(dm) { try fail("brightness.darkMaximum must be within 0…1") }
         if b.minLux <= 0 || b.minLux >= b.maxLux { try fail("brightness needs 0 < minLux < maxLux") }
         if intervalSeconds < 1 { try fail("intervalSeconds must be at least 1") }
         if !(0...1).contains(smoothing) || smoothing == 0 { try fail("smoothing must be within (0, 1]") }

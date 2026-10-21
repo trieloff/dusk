@@ -30,6 +30,16 @@ public struct Sun: Sendable {
         elevation(at: date) > threshold
     }
 
+    /// Whether the sun is climbing (morning) rather than sinking (afternoon).
+    public func isRising(at date: Date) -> Bool {
+        elevation(at: date.addingTimeInterval(300)) > elevation(at: date)
+    }
+
+    /// Up or down with separate morning and evening thresholds.
+    public func isUp(at date: Date, morning: Double, evening: Double) -> Bool {
+        elevation(at: date) > (isRising(at: date) ? morning : evening)
+    }
+
     /// Times today (UTC day containing `date`) when the sun crosses `threshold`
     /// rising and setting; nil during polar day or night.
     public func crossings(on date: Date, threshold: Double = -0.833) -> (rise: Date, set: Date)? {

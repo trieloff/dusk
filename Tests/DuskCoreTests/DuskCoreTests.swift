@@ -81,6 +81,16 @@ import Testing
     #expect(abs(c.brightness(forLux: 10) - 0.7) < 1e-9)  // halfway in log space
 }
 
+@Test func darkModeLowersTheCurveCeiling() {
+    var b = BrightnessConfig()
+    b.darkMaximum = 0.6
+    #expect(b.curve(for: .light).brightness(forLux: 100) == 1.0)
+    #expect(b.curve(for: .dark).brightness(forLux: 100) == 0.6)
+    #expect(b.curve(for: .dark).brightness(forLux: 0.1) == b.minimum)
+    b.darkMaximum = nil
+    #expect(b.curve(for: .dark).brightness(forLux: 100) == 1.0)
+}
+
 @Test func smootherStartsAtTheFirstSample() {
     var s = Smoother(alpha: 0.5)
     #expect(s.add(10) == 10)
@@ -122,6 +132,28 @@ func sunriseAndSunsetWithinThreeMinutes(day: String, rise: String, set: String) 
     #expect(abs(potsdam.elevation(at: c.rise) - -0.833) < 0.1)
     #expect(potsdam.isUp(at: utc("2026-10-21T11:00:00Z")))
     #expect(!potsdam.isUp(at: utc("2026-10-21T21:00:00Z")))
+}
+
+@Test func eveningCanStartBeforeSunset() {
+    // 21 Oct: the sun is at about 7° around 15:00 UTC and sets near 16:00 UTC.
+    let afternoon = utc("2026-10-21T15:05:00Z"), morning = utc("2026-10-21T06:15:00Z")
+    #expect(!potsdam.isRising(at: afternoon))
+    #expect(potsdam.isRising(at: morning))
+    #expect(!potsdam.isUp(at: afternoon, morning: -0.833, evening: 8))
+    #expect(potsdam.isUp(at: afternoon, morning: -0.833, evening: -0.833))
+    // Morning at the same height counts as day: only the evening moved.
+    let am = potsdam.elevation(at: morning)
+    #expect(am > -0.833 && am < 8)
+    #expect(potsdam.isUp(at: morning, morning: -0.833, evening: 8))
+}
+
+@Test func sunThresholdsFallBackToSunElevation() {
+    var c = Config()
+    c.sunElevation = -6
+    #expect(c.sunThreshold(rising: true) == -6)
+    c.eveningSunElevation = 8
+    #expect(c.sunThreshold(rising: false) == 8)
+    #expect(c.sunThreshold(rising: true) == -6)
 }
 
 @Test func polarNightHasNoCrossings() {

@@ -54,9 +54,11 @@ func status() {
     print("")
     print("sun")
     if let sun = c.sun, let el = s.sunElevation {
-        let cross = sun.crossings(on: Date(), threshold: config.sunElevation)
-        print(String(format: "  elevation %.1f°, %@", el, s.sunUp == true ? "up" : "down")
-              + (cross.map { "; today \(time($0.rise))–\(time($0.set))" } ?? ""))
+        let rise = sun.crossings(on: Date(), threshold: config.sunThreshold(rising: true))?.rise
+        let set = sun.crossings(on: Date(), threshold: config.sunThreshold(rising: false))?.set
+        print(String(format: "  elevation %.1f°, %@, %@", el, sun.isRising(at: Date()) ? "rising" : "setting",
+                     s.sunUp == true ? "counts as day" : "counts as night")
+              + "; day today \(rise.map(time) ?? "–")–\(set.map(time) ?? "–")")
     } else {
         print("  no location configured (set latitude/longitude)")
     }
@@ -74,7 +76,7 @@ func status() {
         print("  \(d.name)\(d.isMain ? " (main)" : ""): \(pct(c.displays.brightness(of: d.id))), \(auto)")
     }
     if config.brightness.mode == .curve, let l = s.lux {
-        print("  curve target at \(lux(l)): \(pct(config.brightness.curve.brightness(forLux: l)))")
+        print("  curve target at \(lux(l)) in \(s.appearance) mode: \(pct(config.brightness.curve(for: s.appearance).brightness(forLux: l)))")
     }
     print("")
     let loaded = launchctl(["print", "gui/\(getuid())/\(label)"], quiet: true) == 0
@@ -118,9 +120,11 @@ func watch() {
     for sig in [SIGTERM, SIGINT, SIGHUP] {
         signal(sig, SIG_IGN)
         let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+        // Auto-brightness stays off across restarts (launchd restarts the agent
+        // on every `kickstart -k`, and handing it back for a second makes the
+        // displays visibly dip); `dusk uninstall` is what restores it.
         src.setEventHandler {
             say("stopping (signal \(sig))")
-            c.restoreBrightness()
             exit(0)
         }
         src.resume()

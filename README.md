@@ -61,7 +61,7 @@ indicator on every sample. The display sensors measure the same thing properly.
   rather than jumped. `fixed` reproduces the shortcut: one level for light mode,
   one for dark. `system` leaves brightness to macOS. While dusk drives
   brightness it turns macOS's own auto-brightness off, since two controllers
-  would fight, and restores it when the agent stops or is uninstalled. Adjusting
+  would fight, and restores it on `dusk uninstall`. Adjusting
   brightness by hand pauses dusk on that display for an hour.
 
 Brightness and appearance go through DisplayServices and SkyLight, the private
@@ -100,10 +100,12 @@ minutes, which is what you need to tune the thresholds.
 | `holdSeconds` | `180` | how long a new verdict must hold |
 | `latitude`, `longitude` | – | enables the sun |
 | `sunElevation` | `-0.833` | "down" below this; `-6` waits for civil dusk |
+| `eveningSunElevation` / `morningSunElevation` | – | separate thresholds for the setting and rising sun |
 | `manageAppearance` | `true` | `false` for brightness only |
 | `brightness.mode` | `curve` | `curve`, `fixed`, or `system` |
 | `brightness.minLux` / `maxLux` | `1` / `20` | curve endpoints |
 | `brightness.minimum` / `maximum` | `0.4` / `1.0` | curve range |
+| `brightness.darkMaximum` | – | curve ceiling in dark mode |
 | `brightness.light` / `dark` | `1.0` / `0.5` | `fixed` levels |
 | `brightness.deadband` | `0.03` | ignore smaller changes |
 | `intervalSeconds` | `15` | sensor poll interval |
@@ -111,6 +113,16 @@ minutes, which is what you need to tune the thresholds.
 
 The defaults are a starting point: a desk lamp at night or a north-facing room
 by day can put the two ends of the day closer together than you would think.
+On the first day here, a cloudy midday read 13 lx — darker than the moment the
+screens started to feel too bright at dusk — so lux alone could not tell the
+two apart. What works is `"source": "either"` with `"eveningSunElevation": 7.5`:
+the setting sun starts the evening, the room's light covers dark days, and the
+morning still waits for sunrise.
+
+The sensors also see the screens' own light: in dark mode, raising four
+Studio Displays from 30% to 80% added about 1.7 lx, and a white light-mode
+desktop adds more. That feedback makes the band self-reinforcing (bright
+screens read brighter), which is why the evening is better left to the sun.
 Run `dusk sense 60` for a while, or read the lux lines in the log, and set the
 band between what you see at dusk and at midday.
 

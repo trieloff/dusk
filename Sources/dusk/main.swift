@@ -178,9 +178,11 @@ func launchctl(_ args: [String], quiet: Bool = false) -> Int32 {
 }
 
 func install() {
-    let exe = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
-    let path = exe.path.hasPrefix("/") ? exe.path
-        : URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(exe.path).standardized.path
+    // argv[0] is just "dusk" when run from PATH; ask the loader for the real file.
+    guard let path = Bundle.main.executableURL?.resolvingSymlinksInPath().path,
+          path.hasPrefix("/"), FileManager.default.isExecutableFile(atPath: path) else {
+        die("cannot determine the path of the dusk executable")
+    }
     if path.contains("/.build/") {
         FileHandle.standardError.write(Data("dusk: note: installing the agent from a build directory; `swift build` will replace it under the running agent\n".utf8))
     }

@@ -99,6 +99,9 @@ public struct Config: Codable, Sendable, Equatable {
     /// Also photograph on a schedule (minutes; 0 = never), so the camera can
     /// become a predictor. Each capture lights the camera indicator.
     public var cameraEveryMinutes: Double = 0
+    /// Scheduled photos are deleted after this many days; photos taken with a
+    /// correction are kept.
+    public var photoRetentionDays: Double = 30
 
     public init() {}
 
@@ -125,6 +128,7 @@ public struct Config: Codable, Sendable, Equatable {
         cameraFilter = try c.decodeIfPresent(String.self, forKey: .cameraFilter) ?? d.cameraFilter
         cameraOnCorrection = try c.decodeIfPresent(Bool.self, forKey: .cameraOnCorrection) ?? d.cameraOnCorrection
         cameraEveryMinutes = try c.decodeIfPresent(Double.self, forKey: .cameraEveryMinutes) ?? d.cameraEveryMinutes
+        photoRetentionDays = try c.decodeIfPresent(Double.self, forKey: .photoRetentionDays) ?? d.photoRetentionDays
     }
 
     /// The "sun is down" threshold that applies while the sun is rising or setting.

@@ -63,10 +63,27 @@ private func correction(_ t: Double, to: Appearance, lux: Double = 10, sun: Doub
 @Test func samplesRoundTripThroughJSON() throws {
     var s = sample(1_800_000_000, lux: 12)
     s.weather = WeatherSample(shortwave: 61, diffuse: 50, cloudCover: 86, validAt: s.time)
-    s.cameras = [CameraSample(device: "cam", luma: 0.3, exifBrightness: nil, photo: "x.jpg")]
+    s.cameras = [CameraSample(device: "cam", luma: 0.3, exifBrightness: nil, photo: "x.jpg", takenAt: s.time)]
+    s.displays = [DisplaySample(key: "EC3A8BD7", brightness: 0.47)]
     let e = JSONEncoder(); e.dateEncodingStrategy = .secondsSince1970
     let d = JSONDecoder(); d.dateDecodingStrategy = .secondsSince1970
     #expect(try d.decode(Sample.self, from: e.encode(s)) == s)
+}
+
+@Test func samplesWithoutTheNewFieldsStillDecode() throws {
+    let old = #"{"time":1800000000,"sensors":[{"key":"a","lux":3}],"appearance":"dark","cameras":[]}"#
+    let d = JSONDecoder(); d.dateDecodingStrategy = .secondsSince1970
+    let s = try d.decode(Sample.self, from: Data(old.utf8))
+    #expect(s.displays.isEmpty && s.medianLux == 3)
+}
+
+@Test func eachCameraIsItsOwnFeature() {
+    var s = sample(0, lux: 5)
+    s.cameras = [CameraSample(device: "Studio Display Camera", luma: 0.2, exifBrightness: nil, photo: nil, takenAt: nil),
+                 CameraSample(device: "Studio Display Camera #2", luma: 0.4, exifBrightness: nil, photo: nil, takenAt: nil)]
+    let f = s.features
+    #expect(f["camera luma Studio Display Camera #2"] == 0.4)
+    #expect(abs(f["camera luma"]! - 0.3) < 1e-9)
 }
 
 // MARK: learning
@@ -80,10 +97,9 @@ private func correction(_ t: Double, to: Appearance, lux: Double = 10, sun: Doub
 @Test func findsTheFeatureThatSeparatesTheChoices() throws {
     // Dark whenever the sun is below 7°, whatever the (noisy) room light says.
     var ex: [Example] = []
-    var rng = SystemRandomNumberGenerator()
     for i in 0..<40 {
         let sun = Double(i) - 10  // -10…29
-        let noise = Double.random(in: 0...1, using: &rng)
+        let noise = abs(sin(Double(i) * 12.9898) * 43758.5453).truncatingRemainder(dividingBy: 1)
         let f: [String: Double] = ["sun elevation": sun, "log lux median": 1 + noise]
         ex.append(Example(time: .now, features: f, dark: sun < 7, weight: i % 5 == 0 ? 1 : 0.15))
     }

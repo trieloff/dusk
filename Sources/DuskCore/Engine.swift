@@ -62,6 +62,9 @@ public final class Engine {
     private var lastStored = Date.distantPast
     private var lastLuxLog = Date.distantPast
     private var lastPeriodicPhoto = Date.distantPast
+    private var lastPrune = Date.distantPast
+    /// The latest camera readings, carried into samples until they go stale.
+    private var latestCameras: [CameraSample] = []
     private var timer: DispatchSourceTimer?
 
     public init(config: Config, store: Store? = try? Store(), log: @escaping (String) -> Void = { print($0) }) {
@@ -110,13 +113,25 @@ public final class Engine {
     /// Everything known right now. Weather may come from a 15-minute cache.
     public func sample(now: Date = Date(), cameras: [CameraSample] = []) async -> Sample {
         let readings = sensors.read()
-        let levels = displays.displays().compactMap { displays.brightness(of: $0.id) }
+        let perDisplay = displays.displays().compactMap { d in
+            displays.brightness(of: d.id).map {
+                DisplaySample(key: String(CGDisplaySerialNumber(d.id), radix: 16, uppercase: true), brightness: $0)
+            }
+        }
+        let levels = perDisplay.map(\.brightness)
+        if cameras.isEmpty, let taken = latestCameras.first?.takenAt,
+           now.timeIntervalSince(taken) > max(1, config.cameraEveryMinutes) * 60 * 1.5 {
+            latestCameras = []  // stale: no capture for one and a half intervals
+        }
+        let carried = latestCameras.map { c -> CameraSample in var c = c; c.photo = nil; return c }
         var s = Sample(time: now,
                        sensors: readings.map {
                            SensorSample(key: String(format: "%08x", $0.locationID), lux: $0.lux, kelvin: $0.kelvin)
                        },
                        screenBrightness: levels.isEmpty ? nil : levels.reduce(0, +) / Double(levels.count),
-                       appearance: SystemAppearance.current, cameras: cameras)
+                       appearance: SystemAppearance.current,
+                       cameras: cameras.isEmpty ? carried : cameras)
+        s.displays = perDisplay
         if let sun {
             s.sunElevation = sun.elevation(at: now)
             s.sunRising = sun.isRising(at: now)
@@ -139,10 +154,17 @@ public final class Engine {
             lastStored = now
             store?.add(s)
         }
-        if config.cameraEveryMinutes > 0, Cameras.authorized,
+        if config.cameraEveryMinutes > 0,
            now.timeIntervalSince(lastPeriodicPhoto) >= config.cameraEveryMinutes * 60 {
             lastPeriodicPhoto = now
-            Task { await self.recordPhotos(base: s) }
+            Task {
+                if !Cameras.authorized, !(await Cameras.requestAccess()) { return }
+                await self.recordPhotos(base: s)
+            }
+        }
+        if now.timeIntervalSince(lastPrune) >= 6 * 3600 {
+            lastPrune = now
+            prunePhotos(now: now)
         }
         if now.timeIntervalSince(lastLuxLog) >= 600 {
             lastLuxLog = now
@@ -216,6 +238,7 @@ public final class Engine {
         if config.cameraOnCorrection, allowed {
             correction.sample.cameras = await cameras.capture(matching: config.cameraFilter,
                                                               into: store?.photos)
+            if !correction.sample.cameras.isEmpty { latestCameras = correction.sample.cameras }
         }
         store?.save(correction, state: .pending)
         if let outcome = tracker.record(correction) {
@@ -267,7 +290,27 @@ public final class Engine {
     private func recordPhotos(base: Sample) async {
         var s = base
         s.cameras = await cameras.capture(matching: config.cameraFilter, into: store?.photos)
-        if !s.cameras.isEmpty { store?.add(s) }
+        guard !s.cameras.isEmpty else { return }
+        latestCameras = s.cameras
+        store?.add(s)
+        log("photographed the room: luma " + s.cameras.map { String(format: "%.2f", $0.luma) }.joined(separator: ", "))
+    }
+
+    /// Deletes scheduled photos past the retention period; photos that belong
+    /// to a correction are what the user disagreed about, so they stay.
+    private func prunePhotos(now: Date) {
+        guard let store, config.photoRetentionDays > 0 else { return }
+        let keep = Set(store.corrections(.confirmed).flatMap { $0.sample.cameras.compactMap(\.photo) })
+        let cutoff = now.addingTimeInterval(-config.photoRetentionDays * 86400)
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: store.photos, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+        var removed = 0
+        for f in files where !keep.contains(f.lastPathComponent) {
+            if let d = try? f.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate, d < cutoff {
+                if (try? fm.removeItem(at: f)) != nil { removed += 1 }
+            }
+        }
+        if removed > 0 { log("deleted \(removed) photo(s) older than \(Int(config.photoRetentionDays)) days") }
     }
 
     // MARK: brightness

@@ -78,8 +78,8 @@ public struct Model: Codable, Sendable, Equatable {
 
 public enum Trainer {
     /// Picks the feature (or pair) that best predicts the user's choices, by
-    /// k-fold cross-validated log-loss, with a small penalty per extra feature
-    /// so a pair has to earn its place. Returns nil until there is something to
+    /// k-fold cross-validated log-loss; a pair must beat the best single
+    /// feature by 5%. Returns nil until there is something to
     /// learn from: a correction, and both appearances among the examples.
     public static func train(_ examples: [Example], now: Date = Date(),
                              maxFeatures: Int = 2, folds: Int = 5) -> Model? {
@@ -103,22 +103,25 @@ public enum Trainer {
             }
         }
 
-        var best: (model: Model, score: Double)?
+        var best: [Int: (model: Model, loss: Double)] = [:]  // by feature count
         for set in candidates {
             let rows = examples.filter { e in set.allSatisfy { e.features[$0] != nil } }
             guard rows.contains(where: \.dark), rows.contains(where: { !$0.dark }) else { continue }
             let cv = crossValidate(rows, features: set, folds: folds)
-            let score = cv.loss + 0.01 * Double(set.count - 1)
-            guard best.map({ score < $0.score }) ?? true else { continue }
+            guard best[set.count].map({ cv.loss < $0.loss }) ?? true else { continue }
             var m = fit(rows, features: set)
             m.corrections = rows.filter(\.isCorrection).count
             m.examples = rows.count
             m.correctionAccuracy = cv.correctionAccuracy
             m.loss = cv.loss
             m.trainedAt = now
-            best = (m, score)
+            best[set.count] = (m, cv.loss)
         }
-        return best?.model
+        // A pair has to earn its place: clearly lower loss than the best single
+        // feature, not a rounding error's worth that noise can fake.
+        guard let single = best[1] else { return best[2]?.model }
+        if let pair = best[2], pair.loss < single.loss * 0.95 - 0.005 { return pair.model }
+        return single.model
     }
 
     struct CV { var loss: Double; var correctionAccuracy: Double }

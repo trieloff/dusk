@@ -99,8 +99,14 @@ private final class Grabber: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
                        from connection: AVCaptureConnection) {
         guard continuation != nil, Date().timeIntervalSince(started) >= settle,
               let pixels = CMSampleBufferGetImageBuffer(buffer) else { return }
-        let image = CIImage(cvPixelBuffer: pixels)
-        let luma = Self.meanLuma(image)
+        let full = CIImage(cvPixelBuffer: pixels)
+        let luma = Self.meanLuma(full)
+        // 640 px is plenty to see the room, and keeps a photo every ten minutes
+        // from four cameras around 25 MB a day instead of 170.
+        let longest = max(full.extent.width, full.extent.height)
+        let image = longest > 640
+            ? full.transformed(by: CGAffineTransform(scaleX: 640 / longest, y: 640 / longest))
+            : full
         var exif: Double?
         if let a = CMGetAttachment(buffer, key: kCGImagePropertyExifDictionary, attachmentModeOut: nil) as? [String: Any] {
             exif = a[kCGImagePropertyExifBrightnessValue as String] as? Double
@@ -117,7 +123,7 @@ private final class Grabber: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
             }
         }
         finish(CameraSample(device: device.localizedName + (index > 0 ? " #\(index + 1)" : ""),
-                            luma: luma, exifBrightness: exif, photo: photo))
+                            luma: luma, exifBrightness: exif, photo: photo, takenAt: Date()))
     }
 
     private func finish(_ s: CameraSample?) {

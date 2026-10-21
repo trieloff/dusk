@@ -8,6 +8,12 @@ public struct SensorSample: Codable, Sendable, Equatable {
     public var kelvin: Double?
 }
 
+/// One display's brightness at the time of a sample.
+public struct DisplaySample: Codable, Sendable, Equatable {
+    public var key: String
+    public var brightness: Double
+}
+
 /// Outdoor conditions, from a weather model (Open-Meteo), for the location.
 public struct WeatherSample: Codable, Sendable, Equatable {
     /// Global horizontal irradiance, W/m² — sunlight on the ground, clouds included.
@@ -27,6 +33,9 @@ public struct CameraSample: Codable, Sendable, Equatable {
     /// EXIF BrightnessValue (APEX) when the camera reports one.
     public var exifBrightness: Double?
     public var photo: String?
+    /// When the frame was taken. Readings are carried into later samples
+    /// until the next capture, so the model can use them between photos.
+    public var takenAt: Date?
 }
 
 /// Everything known at one instant. Stored as JSON, one row per minute.
@@ -36,6 +45,9 @@ public struct Sample: Codable, Sendable, Equatable {
     /// Mean brightness across managed displays, 0…1. The sensors see the
     /// screens' own light, so this lets a model correct for it.
     public var screenBrightness: Double?
+    /// Each display's brightness. Dusk sets them alike, so as features they
+    /// would only repeat the mean; kept for when one is changed by hand.
+    public var displays: [DisplaySample] = []
     public var appearance: Appearance
     public var sunElevation: Double?
     public var sunRising: Bool?
@@ -59,6 +71,21 @@ public struct Sample: Codable, Sendable, Equatable {
         self.minutesSinceSunrise = minutesSinceSunrise
         self.weather = weather
         self.cameras = cameras
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        time = try c.decode(Date.self, forKey: .time)
+        sensors = try c.decode([SensorSample].self, forKey: .sensors)
+        screenBrightness = try c.decodeIfPresent(Double.self, forKey: .screenBrightness)
+        displays = try c.decodeIfPresent([DisplaySample].self, forKey: .displays) ?? []
+        appearance = try c.decode(Appearance.self, forKey: .appearance)
+        sunElevation = try c.decodeIfPresent(Double.self, forKey: .sunElevation)
+        sunRising = try c.decodeIfPresent(Bool.self, forKey: .sunRising)
+        minutesToSunset = try c.decodeIfPresent(Double.self, forKey: .minutesToSunset)
+        minutesSinceSunrise = try c.decodeIfPresent(Double.self, forKey: .minutesSinceSunrise)
+        weather = try c.decodeIfPresent(WeatherSample.self, forKey: .weather)
+        cameras = try c.decodeIfPresent([CameraSample].self, forKey: .cameras) ?? []
     }
 
     public var medianLux: Double? { median(sensors.map(\.lux)) }
@@ -93,6 +120,7 @@ public struct Sample: Codable, Sendable, Equatable {
         }
         let lumas = cameras.map(\.luma)
         if let l = median(lumas) { f["camera luma"] = l }
+        if cameras.count > 1 { for c in cameras { f["camera luma \(c.device)"] = c.luma } }
         if let b = median(cameras.compactMap(\.exifBrightness)) { f["camera exif brightness"] = b }
         return f
     }

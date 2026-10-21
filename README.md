@@ -54,9 +54,11 @@ outdoor irradiance). Its probability has its own hysteresis (dark above 0.6,
 light below 0.4, nothing in between) and the usual hold time. Until there is a
 correction to learn from, the rules below decide.
 
-Camera photos are features too, but only once they exist all the time: by
-default the camera runs only on corrections, which is enough to keep the photos
-but not to predict from. Set `cameraEveryMinutes` to let the model try it.
+Camera photos are features too (each camera's mean luma, and their median),
+but only once they exist all the time: by default the camera runs only on
+corrections, which is enough to keep the photos but not to predict from. Set
+`cameraEveryMinutes` (say 10) and each capture's readings are carried into the
+following samples until the next one, so the model can try them.
 Photos stay on this Mac in `~/Library/Application Support/Dusk/photos`.
 
 ## Shortcuts
@@ -173,6 +175,7 @@ minutes, which is what you need to tune the thresholds.
 | `cameraFilter` | `Studio Display Camera` | which cameras to use (substring) |
 | `cameraOnCorrection` | `true` | photograph the room with each correction |
 | `cameraEveryMinutes` | `0` | also on a schedule, so the camera can be a predictor |
+| `photoRetentionDays` | `30` | delete scheduled photos after this; correction photos stay |
 
 The defaults are a starting point: a desk lamp at night or a north-facing room
 by day can put the two ends of the day closer together than you would think.

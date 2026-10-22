@@ -42,6 +42,9 @@ public final class Store: @unchecked Sendable {
             CREATE TABLE IF NOT EXISTS corrections (
                 id TEXT PRIMARY KEY, time REAL NOT NULL, state TEXT NOT NULL, json TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS models (time REAL PRIMARY KEY, json TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS probes (
+                time REAL NOT NULL, kind TEXT NOT NULL, source TEXT NOT NULL, json TEXT NOT NULL,
+                PRIMARY KEY (time, kind));
             """)
     }
 
@@ -70,7 +73,19 @@ public final class Store: @unchecked Sendable {
             m.trainedAt.timeIntervalSince1970, String(decoding: json, as: UTF8.self))
     }
 
+    public func add(_ probe: Probe) {
+        guard let json = try? encoder.encode(probe) else { return }
+        run("INSERT OR REPLACE INTO probes (time, kind, source, json) VALUES (?, ?, ?, ?)",
+            probe.time.timeIntervalSince1970, probe.kind.rawValue, probe.source,
+            String(decoding: json, as: UTF8.self))
+    }
+
     // MARK: reads
+
+    public func probes(since: Date) -> [Probe] {
+        rows("SELECT json FROM probes WHERE time >= ? ORDER BY time", since.timeIntervalSince1970)
+            .compactMap { try? decoder.decode(Probe.self, from: Data($0.utf8)) }
+    }
 
     public func samples(since: Date) -> [Sample] {
         rows("SELECT json FROM samples WHERE time >= ? ORDER BY time", since.timeIntervalSince1970)

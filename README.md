@@ -37,6 +37,30 @@ sunrise, and outdoor irradiance and cloud cover from
 low summer sun and an overcast October afternoon at the same angle are very
 different light.
 
+### What the sensors see of the screens
+
+In light mode in the evening, most of what the display sensors read is the
+displays themselves: at 90% brightness, switching to dark mode took them from
+about 10.5 to 1.9 lux within a minute. So every switch is used as a
+measurement. When Dusk changes the appearance (and nothing else), or changes
+every display's brightness by at least 10 points (and nothing else), it reads
+each sensor just before and again once the readings have settled. That is a
+*probe*; `dusk probes` lists them. From the probes, per sensor and in lux per
+unit of brightness:
+
+- **light−dark**: what switching to light mode adds;
+- **light** and **dark**: the slope with brightness in each mode (one can be
+  derived from the other and light−dark).
+
+Estimates are medians of the latest probes, live ones preferred over probes
+rebuilt from minute samples. Every sample then carries them, and the features
+gain, per sensor and as a median, `screen delta` (light−dark), `log room lux`
+(reading minus estimated screen light) and `light screen share` (the fraction
+of the light that would be screens in light mode at the current brightness).
+Nothing that differs by mode is a feature, since it would reveal the answer.
+`brightness.useRoomLux` makes the brightness curve follow room lux instead of
+the raw reading. It is off until the estimates have been checked.
+
 When you switch by hand, Dusk keeps the room as it was at that moment, and
 photographs it with each Studio Display camera. Switching back within five
 minutes cancels both clicks; otherwise the correction is confirmed and the
@@ -167,6 +191,7 @@ minutes, which is what you need to tune the thresholds.
 | `brightness.darkMaximum` | – | curve ceiling in dark mode |
 | `brightness.light` / `dark` | `1.0` / `0.5` | `fixed` levels |
 | `brightness.deadband` | `0.03` | ignore smaller changes |
+| `brightness.useRoomLux` | `false` | follow the room with the screens' light subtracted |
 | `intervalSeconds` | `15` | sensor poll interval |
 | `smoothing` | `0.3` | weight of each new reading |
 | `sampleSeconds` | `60` | how often a sample is stored |
@@ -203,6 +228,7 @@ dusk install | uninstall     manage the launch agent
 dusk appearance light|dark [--learn]   set the appearance (and teach dusk)
 dusk model [retrain]         the learned predictor
 dusk corrections             every manual switch and what became of it
+dusk probes                  what each sensor sees of the screens, from every switch
 dusk brightness 0.8 | 80%    set every display's brightness by hand
 dusk config [init --lat N --lon N]
 ```

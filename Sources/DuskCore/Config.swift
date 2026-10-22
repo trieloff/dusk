@@ -36,6 +36,9 @@ public struct BrightnessConfig: Codable, Sendable, Equatable {
     public var dark: Double = 0.5
     /// Changes smaller than this are not applied, so sensor noise never shows.
     public var deadband: Double = 0.03
+    /// Follow the room's light with the screens' own light subtracted, once
+    /// probes have measured it. Off until the estimates have been checked.
+    public var useRoomLux: Bool = false
 
     public init() {}
 
@@ -51,6 +54,7 @@ public struct BrightnessConfig: Codable, Sendable, Equatable {
         light = try c.decodeIfPresent(Double.self, forKey: .light) ?? d.light
         dark = try c.decodeIfPresent(Double.self, forKey: .dark) ?? d.dark
         deadband = try c.decodeIfPresent(Double.self, forKey: .deadband) ?? d.deadband
+        useRoomLux = try c.decodeIfPresent(Bool.self, forKey: .useRoomLux) ?? d.useRoomLux
     }
 
     public var curve: BrightnessCurve { curve(for: .light) }

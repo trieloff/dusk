@@ -65,6 +65,10 @@ public final class Engine {
     private var lastPrune = Date.distantPast
     /// The latest camera readings, carried into samples until they go stale.
     private var latestCameras: [CameraSample] = []
+    /// Set while a probe is measuring; nothing else may touch the screens then.
+    private var probing = false
+    private var probes: [Probe] = []
+    public private(set) var screenLight: [ScreenSensorEstimate] = []
     private var timer: DispatchSourceTimer?
 
     public init(config: Config, store: Store? = try? Store(), log: @escaping (String) -> Void = { print($0) }) {
@@ -79,6 +83,16 @@ public final class Engine {
             weather = nil
         }
         model = store?.latestModel()
+        if let store {
+            probes = store.probes(since: Date().addingTimeInterval(-60 * 86400))
+            if !probes.contains(where: { $0.source == "backfill" }) {
+                let rebuilt = ScreenLight.backfill(store.samples(since: Date().addingTimeInterval(-60 * 86400)))
+                for p in rebuilt { store.add(p) }
+                probes = store.probes(since: Date().addingTimeInterval(-60 * 86400))
+                if !rebuilt.isEmpty { log("rebuilt \(rebuilt.count) screen-light probe(s) from history") }
+            }
+            screenLight = ScreenLight.estimate(probes)
+        }
         // Settle switches that were still pending when we last quit.
         for c in store?.corrections(.pending) ?? [] {
             if Date().timeIntervalSince(c.time) >= tracker.window {
@@ -132,6 +146,7 @@ public final class Engine {
                        appearance: SystemAppearance.current,
                        cameras: cameras.isEmpty ? carried : cameras)
         s.displays = perDisplay
+        s.screenLight = screenLight
         if let sun {
             s.sunElevation = sun.elevation(at: now)
             s.sunRising = sun.isRising(at: now)
@@ -145,10 +160,13 @@ public final class Engine {
     }
 
     public func tick() async {
+        guard !probing else { return }
         let now = Date()
         let s = await sample(now: now)
+        guard !probing else { return }
         lastSample = s
-        let lux = s.medianLux.map { smoother.add($0) }
+        let measured = config.brightness.useRoomLux ? (s.medianRoomLux ?? s.medianLux) : s.medianLux
+        let lux = measured.map { smoother.add($0) }
 
         if now.timeIntervalSince(lastStored) >= config.sampleSeconds {
             lastStored = now
@@ -180,16 +198,13 @@ public final class Engine {
             if decider.current != nil { decider.observe(s.appearance) }
             let v = verdict(for: s, smoothedLux: lux)
             if automatic, let target = decider.update(v, now: now), target != s.appearance {
-                do {
-                    try SystemAppearance.set(target)
+                if await switchAppearance(to: target) {
                     appearance = target
                     log("appearance → \(target) (\(describe(lastDecider)))")
-                } catch {
-                    log("appearance: \(error)")
                 }
             }
         }
-        if automatic { brightness(for: appearance, lux: lux, now: now) }
+        if automatic { await brightness(for: appearance, lux: lux, now: now) }
         onChange?()
     }
 
@@ -226,7 +241,7 @@ public final class Engine {
         let before = await sample(now: now)  // the room as it was when the user objected
         let from = before.appearance
         guard target != from else { return }
-        do { try SystemAppearance.set(target) } catch { log("appearance: \(error)"); return }
+        guard await switchAppearance(to: target) else { return }
         decider.observe(target)
         log("appearance → \(target) by hand (\(source))")
         onChange?()
@@ -313,9 +328,50 @@ public final class Engine {
         if removed > 0 { log("deleted \(removed) photo(s) older than \(Int(config.photoRetentionDays)) days") }
     }
 
+    // MARK: probes
+
+    private func readSensors() -> [SensorSample] {
+        sensors.read().map { SensorSample(key: String(format: "%08x", $0.locationID), lux: $0.lux, kelvin: $0.kelvin) }
+    }
+
+    private func meanBrightness() -> Double? {
+        let levels = displays.displays().compactMap { displays.brightness(of: $0.id) }
+        return levels.isEmpty ? nil : levels.reduce(0, +) / Double(levels.count)
+    }
+
+    /// Switches appearance, holding brightness still and measuring what every
+    /// sensor saw change. Returns whether the switch happened.
+    private func switchAppearance(to target: Appearance) async -> Bool {
+        let from = SystemAppearance.current
+        probing = true
+        defer { probing = false }
+        let before = readSensors()
+        let b = meanBrightness()
+        do { try SystemAppearance.set(target) } catch { log("appearance: \(error)"); return false }
+        let after = await settledReading(sensors)
+        if let b, let b2 = meanBrightness() {
+            record(Probe(time: Date(), kind: .appearance, fromAppearance: from, toAppearance: target,
+                         fromBrightness: b, toBrightness: b2, before: before, after: after.readings,
+                         settleSeconds: after.seconds))
+        }
+        return true
+    }
+
+    private func record(_ p: Probe) {
+        store?.add(p)
+        probes.append(p)
+        screenLight = ScreenLight.estimate(probes)
+        let per = p.after.compactMap { s in p.perUnitBrightness(s.key).map { String(format: "%@ %+.1f", s.key, $0) } }
+        log("probe (\(p.kind.rawValue), \(String(format: "%.1f", p.settleSeconds ?? 0)) s): "
+            + (per.isEmpty ? "unusable" : per.joined(separator: ", ") + " lx per unit brightness"))
+    }
+
+    public var allProbes: [Probe] { probes }
+
     // MARK: brightness
 
-    private func brightness(for appearance: Appearance, lux: Double?, now: Date) {
+    private func brightness(for appearance: Appearance, lux: Double?, now: Date) async {
+        guard !probing else { return }
         let b = config.brightness
         let target: Double?
         switch b.mode {
@@ -340,9 +396,23 @@ public final class Engine {
             if abs(current - target) >= b.deadband { changes.append((d, current)) }
         }
         guard !changes.isEmpty else { return }
+        // Only a change on every display is a clean experiment.
+        let probe = changes.count == displays.displays().count
+            && changes.allSatisfy { abs($0.from - target) >= 0.1 }
+        probing = probe
+        defer { probing = false }
+        let before = probe ? readSensors() : []
+        let fromB = meanBrightness()
         do {
             try displays.fade(changes.map { ($0.display.id, target) })
             for c in changes { applied[c.display.id] = target }
+            if probe, let fromB {
+                let after = await settledReading(sensors)
+                record(Probe(time: Date(), kind: .brightness, fromAppearance: appearance,
+                             toAppearance: SystemAppearance.current, fromBrightness: fromB,
+                             toBrightness: meanBrightness() ?? target, before: before,
+                             after: after.readings, settleSeconds: after.seconds))
+            }
             let from = Set(changes.map { pct($0.from) }).sorted().joined(separator: "/")
             log("brightness \(from) → \(pct(target)) on \(changes.count) display(s)")
         } catch {

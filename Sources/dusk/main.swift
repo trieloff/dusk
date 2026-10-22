@@ -46,10 +46,14 @@ func time(_ d: Date) -> String {
     print("")
     print("ambient light")
     if s.sensors.isEmpty { print("  no sensor found") }
+    let room = s.roomLux
     for r in s.sensors {
-        print("  sensor \(r.key): \(lux(r.lux))" + (r.kelvin.map { String(format: ", %.0f K", $0) } ?? ""))
+        print("  sensor \(r.key): \(lux(r.lux))" + (r.kelvin.map { String(format: ", %.0f K", $0) } ?? "")
+              + (room[r.key].map { ", room without screens ≈ \(lux($0))" } ?? ""))
     }
-    if s.sensors.count > 1 { print("  median: \(lux(s.medianLux))") }
+    if s.sensors.count > 1 {
+        print("  median: \(lux(s.medianLux))" + (s.medianRoomLux.map { ", room ≈ \(lux($0))" } ?? ""))
+    }
     print("")
     print("sun and sky")
     if let sun = e.sun, let el = s.sunElevation {
@@ -188,6 +192,27 @@ nonisolated(unsafe) var signalSources: [DispatchSourceSignal] = []
     print("  trained \(m.trainedAt)")
 }
 
+@MainActor func probesCommand() {
+    let e = Engine(config: loadConfig(), log: { print($0) })
+    let f = DateFormatter()
+    f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+    for p in e.allProbes {
+        let per = p.after.map { s in p.perUnitBrightness(s.key).map { String(format: "%+6.1f", $0) } ?? "     –" }
+        print("\(f.string(from: p.time))  \(p.kind.rawValue.padding(toLength: 10, withPad: " ", startingAt: 0)) "
+              + "\(p.fromAppearance.rawValue)→\(p.toAppearance.rawValue) "
+              + String(format: "%3.0f%%→%3.0f%%  ", p.fromBrightness * 100, p.toBrightness * 100)
+              + per.joined(separator: " ") + "  \(p.source)"
+              + (p.settleSeconds.map { String(format: ", settled in %.1f s", $0) } ?? ""))
+    }
+    print("")
+    print("per sensor, lux per unit of screen brightness:")
+    print("  sensor    light−dark   light   dark   probes")
+    func n(_ x: Double?) -> String { x.map { String(format: "%6.1f", $0) } ?? "     –" }
+    for est in e.screenLight {
+        print("  \(est.key)  \(n(est.delta))     \(n(est.lightGain)) \(n(est.darkGain))   \(est.probes)")
+    }
+}
+
 func correctionsCommand() {
     guard let store = try? Store() else { die("cannot open the history") }
     let f = DateFormatter()
@@ -291,6 +316,7 @@ func help() {
       dusk appearance light|dark [--learn]   set the appearance (and teach dusk)
       dusk model [retrain]         the learned predictor
       dusk corrections             every manual switch and what became of it
+      dusk probes                  what each sensor sees of the screens, from every switch
       dusk brightness 0.8 | 80%    set every display's brightness by hand
       dusk config [init --lat N --lon N]   show, or write, \(Config.defaultURL.path)
     """)
@@ -309,6 +335,7 @@ case "uninstall": uninstall()
 case "appearance": await setAppearance(Array(args.dropFirst()))
 case "model": await modelCommand(Array(args.dropFirst()))
 case "corrections": correctionsCommand()
+case "probes": probesCommand()
 case "brightness": setBrightness(Array(args.dropFirst()))
 case "config": configCommand(Array(args.dropFirst()))
 case "version", "--version": print("dusk \(version)")

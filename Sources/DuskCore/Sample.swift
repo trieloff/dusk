@@ -48,6 +48,10 @@ public struct Sample: Codable, Sendable, Equatable {
     /// Each display's brightness. Dusk sets them alike, so as features they
     /// would only repeat the mean; kept for when one is changed by hand.
     public var displays: [DisplaySample] = []
+    /// What each sensor is currently estimated to see of the screens, from the
+    /// probes so far (see Probes.swift). Copied into every sample so features
+    /// can be computed from the sample alone.
+    public var screenLight: [ScreenSensorEstimate] = []
     public var appearance: Appearance
     public var sunElevation: Double?
     public var sunRising: Bool?
@@ -79,6 +83,7 @@ public struct Sample: Codable, Sendable, Equatable {
         sensors = try c.decode([SensorSample].self, forKey: .sensors)
         screenBrightness = try c.decodeIfPresent(Double.self, forKey: .screenBrightness)
         displays = try c.decodeIfPresent([DisplaySample].self, forKey: .displays) ?? []
+        screenLight = try c.decodeIfPresent([ScreenSensorEstimate].self, forKey: .screenLight) ?? []
         appearance = try c.decode(Appearance.self, forKey: .appearance)
         sunElevation = try c.decodeIfPresent(Double.self, forKey: .sunElevation)
         sunRising = try c.decodeIfPresent(Bool.self, forKey: .sunRising)
@@ -89,6 +94,20 @@ public struct Sample: Codable, Sendable, Equatable {
     }
 
     public var medianLux: Double? { median(sensors.map(\.lux)) }
+
+    /// Each sensor's reading minus what the screens are estimated to add in
+    /// the current appearance and brightness; only for sensors with an estimate.
+    public var roomLux: [String: Double] {
+        guard let b = screenBrightness else { return [:] }
+        let est = Dictionary(screenLight.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
+        var out: [String: Double] = [:]
+        for s in sensors {
+            if let g = est[s.key]?.gain(appearance) { out[s.key] = max(0, s.lux - g * b) }
+        }
+        return out
+    }
+
+    public var medianRoomLux: Double? { median(Array(roomLux.values)) }
 
     /// Named numeric features for the model search. Light quantities are on a
     /// log scale, because both perception and the useful thresholds are.
@@ -109,6 +128,27 @@ public struct Sample: Codable, Sendable, Equatable {
             if let k = median(ks) { f["kelvin median"] = k }
         }
         if let b = screenBrightness { f["screen brightness"] = b }
+        // Screen-light features. Only appearance-independent ones: the gain in
+        // the current mode would tell the model which mode it is in.
+        let est = Dictionary(screenLight.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
+        let room = roomLux
+        var shares: [Double] = []
+        for s in sensors {
+            guard let e = est[s.key] else { continue }
+            if let d = e.delta { f["screen delta \(s.key)"] = d }
+            if let r = room[s.key] {
+                f["log room lux \(s.key)"] = log(r)
+                if let lg = e.lightGain, let b = screenBrightness {
+                    let c = lg * b
+                    let share = c / (r + c + 0.01)
+                    f["light screen share \(s.key)"] = share
+                    shares.append(share)
+                }
+            }
+        }
+        if let r = median(Array(room.values)) { f["log room lux median"] = log(r) }
+        if let d = median(screenLight.compactMap(\.delta)) { f["screen delta median"] = d }
+        if let sh = median(shares) { f["light screen share median"] = sh }
         if let e = sunElevation { f["sun elevation"] = e }
         if let r = sunRising { f["sun rising"] = r ? 1 : 0 }
         if let m = minutesToSunset { f["minutes to sunset"] = m }
